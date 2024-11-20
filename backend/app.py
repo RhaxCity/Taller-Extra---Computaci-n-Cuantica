@@ -1,167 +1,169 @@
-from flask import Flask, request, jsonify, send_from_directory
+import base64
+from io import BytesIO
+from flask import Flask, request, jsonify
 from qiskit import QuantumCircuit, transpile
 from qiskit_aer import AerSimulator
 import random
 import time
-import os
+from flask_cors import CORS
 
-app = Flask(__name__, static_folder="../frontend", static_url_path="/")
+app = Flask(__name__)
+CORS(app)
 
-# Modificado: Aumento de iteraciones y shots
+# Implementación del algoritmo de búsqueda cuántica de Grover
 def grover_search(n, target, max_attempts=100, shots=4096):
+    """
+    Implementa el algoritmo de búsqueda de Grover para buscar un target en una lista de 2^n elementos.
+    """
     sim = AerSimulator()
 
-    # Convertir el target a entero si es una cadena numérica
+    # Validar y convertir el target
     if isinstance(target, str) and target.isdigit():
         target = int(target)
     elif isinstance(target, str):
         return {"error": "El target debe ser un número entero válido."}
 
-    # Convertir el target a binario
-    target = bin(target)[2:].zfill(n)  # Convertir a binario y rellenar con ceros a la izquierda hasta 'n' bits
+    # Convertir el target a binario con n bits
+    target_bin = bin(target)[2:].zfill(n)
 
-    # Crear el oracle que marca el valor objetivo
+    # Crear el oráculo de Grover que identifica el estado objetivo
     oracle = QuantumCircuit(n)
-    for i, bit in enumerate(target):
+    for i, bit in enumerate(target_bin):
         if bit == "0":
-            oracle.x(i)  # Aplica X si el bit es 0 en el target
-    oracle.h(range(n))  # Apply Hadamard to all qubits
-    oracle.x(range(n))  # Apply X to all qubits
-    oracle.h(range(n))  # Apply Hadamard again to complete the oracle
+            oracle.x(i)  # Flip en posiciones donde el bit objetivo es 0
 
-    # Circuito de Grover
+    oracle.h(range(n))  # Operaciones del oráculo
+    oracle.x(range(n))
+    oracle.h(range(n))
+
+    # Circuito principal de Grover
     grover_circuit = QuantumCircuit(n)
-    grover_circuit.h(range(n))  # Inicializar los qubits en estados de superposición
-    grover_circuit.compose(oracle, inplace=True)  # Aplicar el oracle
+    grover_circuit.h(range(n))  # Inicializar qubits en superposición
+    grover_circuit.compose(oracle, inplace=True)  # Aplicar el oráculo
 
-    # Intentos hasta encontrar el valor objetivo
     attempts = 0
     occurrence_count = 0
 
+    # Repetir el algoritmo hasta encontrar el objetivo o agotar intentos
     while attempts < max_attempts:
-        # Operación de amplificación de amplitud (diffusion operator)
+        # Operador de difusión para amplificación de amplitud
         grover_circuit.h(range(n))
         grover_circuit.x(range(n))
-        grover_circuit.h(n-1)
-        grover_circuit.cx(range(n-1), n-1)
-        grover_circuit.h(n-1)
+        grover_circuit.h(n - 1)
+        grover_circuit.cx(range(n - 1), n - 1)
+        grover_circuit.h(n - 1)
         grover_circuit.x(range(n))
         grover_circuit.h(range(n))
 
-        grover_circuit.measure_all()  # Medir los qubits
+        grover_circuit.measure_all()  # Medir el circuito cuántico
 
-        # Transpilar el circuito
+        # Transpilar y simular el circuito
         transpiled_circuit = transpile(grover_circuit, sim, optimization_level=2)
-
-        # Ejecutar la simulación
         result = sim.run(transpiled_circuit, shots=shots).result()
         counts = result.get_counts()
 
-        # Asegurarse de contar correctamente las ocurrencias del target
-        occurrence_count = counts.get(target, 0)  # Número de veces que aparece el target
+        # Imprimir los resultados para depuración
+        print(f"Intento {attempts + 1}: counts = {counts}")
+
+        # Contar las ocurrencias del target
+        occurrence_count = counts.get(target_bin, 0)
 
         if occurrence_count > 0:
-            break  # Si encontramos el objetivo, salimos del ciclo
+            break  # Salir si encontramos el objetivo
 
-        attempts += 1  # Si no se encuentra, intentamos nuevamente
+        attempts += 1  # Incrementar intentos si no se encuentra
 
-    return occurrence_count, attempts  # Devuelve el número de ocurrencias y el número de intentos realizados
+    # Si no se encuentra, el número de intentos es el máximo alcanzado
+    if occurrence_count == 0:
+        attempts = max_attempts
 
-# Búsqueda lineal
+    # Generar la imagen del circuito en memoria
+    buffer = BytesIO()
+    grover_circuit.draw(output='mpl').savefig(buffer, format='png')
+    buffer.seek(0)
+
+    # Codificar la imagen en base64
+    circuit_image_base64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
+
+    return occurrence_count, attempts, circuit_image_base64
+
+
+# Implementación de búsqueda lineal clásica
 def linear_search(data_set, target):
+    """
+    Busca un valor objetivo en un conjunto de datos de forma secuencial.
+    """
     iterations = 0
     for i, value in enumerate(data_set):
         iterations += 1
         if value == target:
-            return i, iterations  # Retorna la posición y el número de iteraciones
-    return -1, iterations  # Si no se encuentra el target, retorna -1 y el número de iteraciones
+            return i, iterations
+    return -1, iterations
+
 
 @app.route('/grover', methods=['POST'])
 def grover_endpoint():
+    """
+    Endpoint para realizar la búsqueda cuántica con el algoritmo de Grover.
+    """
+    data = request.get_json()
+    n = data['n']
+    target = data['target']
+
+    # Medir el tiempo de ejecución
     start_time = time.time()
-    try:
-        request_data = request.get_json()
-        app.logger.info(f"Datos recibidos en /grover: {request_data}")
 
-        # Verifica que los datos sean válidos
-        if 'n' not in request_data or 'target' not in request_data:
-            return jsonify({"error": "Faltan parámetros: 'n' y/o 'target'"}), 400
+    # Llamar al algoritmo de Grover
+    occurrence_count, attempts, circuit_image_base64 = grover_search(n, target)
 
-        n = request_data['n']
-        target = request_data['target']
+    # Medir el tiempo transcurrido
+    elapsed_time = time.time() - start_time
 
-        # Asegurarse de que 'n' es un número entero válido y que 'target' no está vacío
-        if not isinstance(n, int) or n <= 0 or not target:
-            return jsonify({"error": "'n' debe ser un número entero positivo y 'target' no puede estar vacío."}), 400
+    # Crear la respuesta con los resultados y la imagen en base64
+    return jsonify({
+        "algorithm": "Grover's Search",
+        "target": target,
+        "occurrences": occurrence_count,  # Ocurrencias del target
+        "attempts": attempts,  # Número de intentos hasta encontrarlo
+        "time": elapsed_time,
+        "circuit_image": circuit_image_base64  # Imagen codificada en base64
+    })
 
-        # Realizar búsqueda cuántica de Grover
-        grover_result = grover_search(n, target)
-
-        if isinstance(grover_result, dict) and 'error' in grover_result:
-            return jsonify(grover_result), 400
-
-        occurrence_count = grover_result
-        elapsed_time = time.time() - start_time
-
-        return jsonify({
-            "algorithm": "Grover",
-            "data_set_size": 2**n,  # Tamaño de la base de datos (2^n)
-            "target": target,
-            "occurrences": occurrence_count,  # Ocurrencias encontradas en las simulaciones de Grover
-            "iterations": 1,  # Para Grover, no contamos las iteraciones explícitamente, ya que solo tenemos el conteo
-            "time": elapsed_time
-        })
-
-    except Exception as e:
-        app.logger.error(f"Error en /grover: {str(e)}")
-        return jsonify({"error": f"Error en la solicitud: {str(e)}"}), 400
 
 @app.route('/linear', methods=['POST'])
 def linear_endpoint():
+    """
+    Endpoint para realizar la búsqueda lineal clásica.
+    """
+    data = request.get_json()
+    n = data['n']
+    target = data['target']
+
+    # Crear un conjunto de datos de tamaño 2^n
+    data_set = [random.randint(0, 1000) for _ in range(2**n)]
+
+    # Asegurar que el target esté en el conjunto de datos en una posición aleatoria
+    random_position = random.randint(0, len(data_set) - 1)
+    data_set[random_position] = target
+
+    # Medir el tiempo de ejecución
     start_time = time.time()
-    try:
-        request_data = request.get_json()
-        app.logger.info(f"Datos recibidos en /linear: {request_data}")
 
-        # Verifica que los datos sean válidos
-        if 'n' not in request_data or 'target' not in request_data:
-            return jsonify({"error": "Faltan parámetros: 'n' y/o 'target'"}), 400
+    # Llamar a la búsqueda lineal
+    index, iterations = linear_search(data_set, target)
 
-        n = request_data['n']
-        target = request_data['target']
+    # Medir el tiempo transcurrido
+    elapsed_time = time.time() - start_time
 
-        # Asegurarse de que 'n' es un número entero válido y que 'target' no está vacío
-        if not isinstance(n, int) or n <= 0 or not target:
-            return jsonify({"error": "'n' debe ser un número entero positivo y 'target' no puede estar vacío."}), 400
+    return jsonify({
+        "algorithm": "Linear Search",
+        "size": len(data_set),  # Tamaño del conjunto de datos
+        "target": target,
+        "index": index,  # Índice donde se encontró el target
+        "iterations": iterations,  # Número de iteraciones
+        "time": elapsed_time
+    })
 
-        # Generar el conjunto de datos
-        data_set = random.sample(range(1, 2**n), 2**n - 1)  # Crear un conjunto de números del 1 a 2^n - 1
-        data_set.append(target)  # Añadir el valor de target en una posición aleatoria
-
-        # Realizar búsqueda lineal
-        result_index, iterations = linear_search(data_set, target)
-        elapsed_time = time.time() - start_time
-
-        return jsonify({
-            "algorithm": "Linear Search",
-            "data_set_size": 2**n,  # Tamaño de la lista generada (2^n elementos)
-            "target": target,
-            "result_index": result_index,
-            "iterations": iterations,
-            "time": elapsed_time
-        })
-
-    except Exception as e:
-        app.logger.error(f"Error en /linear: {str(e)}")
-        return jsonify({"error": f"Error en la solicitud: {str(e)}"}), 400
-
-@app.route('/')
-def serve_frontend():
-    return send_from_directory(app.static_folder, "index.html")
-
-@app.route('/<path:path>')
-def serve_static_files(path):
-    return send_from_directory(app.static_folder, path)
 
 if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=5000)
+    app.run(debug=True, host='0.0.0.0', port=5001)

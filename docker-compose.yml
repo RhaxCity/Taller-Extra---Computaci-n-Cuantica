@@ -1,12 +1,18 @@
 services:
-  app:
+  backend:
     build:
-      context: .
-      dockerfile: Dockerfile
-    ports:
-      - "5000:5000" # Mapea el puerto 5000 del contenedor al puerto 5000 del host
+      context: ./backend  # Cambia el contexto al directorio del backend
+      dockerfile: Dockerfile  # El Dockerfile está en la misma carpeta
     volumes:
-      - ./backend:/app/backend # Mapear backend local
-      - ./frontend:/app/frontend # Mapear frontend local
-    environment:
-      - FLASK_ENV=development
+      - ./backend:/app  # Mapea el código local al contenedor
+    ports:
+      - "5001:5001"
+
+  frontend:
+    build:
+      context: ./frontend  # Cambia el contexto al directorio del frontend
+      dockerfile: Dockerfile  # El Dockerfile está en la misma carpeta
+    volumes:
+      - ./frontend:/app  # Mapea el código local al contenedor
+    ports:
+      - "5000:5000"
